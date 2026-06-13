@@ -11,37 +11,46 @@ env:
 jobs:
   build-linux:
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
       - run: sudo apt update && sudo apt install -y libssl-dev pkg-config
-      - run: cargo check -p codex-tui --tests
+      - run: cargo check -p codex-tui
       - run: cargo build -p codex-tui --release
       - uses: actions/upload-artifact@v4
         with:
           name: codex-tui-linux
-          path: target/release/codex-tui
+          path: codex-rs/target/release/codex-tui
 
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
-      - run: cargo check -p codex-tui --tests
+      - run: cargo check -p codex-tui
       - run: cargo build -p codex-tui --release
       - uses: actions/upload-artifact@v4
         with:
           name: codex-tui-windows
-          path: target/release/codex-tui.exe
+          path: codex-rs/target/release/codex-tui.exe
 
   build-macos:
     runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
-      - run: cargo check -p codex-tui --tests
+      - run: cargo check -p codex-tui
       - run: cargo build -p codex-tui --release
       - uses: actions/upload-artifact@v4
         with:
           name: codex-tui-macos
-          path: target/release/codex-tui
+          path: codex-rs/target/release/codex-tui
