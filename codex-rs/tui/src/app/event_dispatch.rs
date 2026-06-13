@@ -2022,6 +2022,15 @@ impl App {
             AppEvent::KeymapCleared { context, action } => {
                 self.apply_keymap_clear(context, action).await;
             }
+            AppEvent::StreamedAgentMarkdown(markdown) => {
+                if !markdown.is_empty() {
+                    self.chat_widget.record_agent_markdown(&markdown);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::AgentTurnFinished { turn_id: _ } => {
+                self.chat_widget.turn_lifecycle.agent_turn_running = false;
+            }
         }
         Ok(AppRunControl::Continue)
     }

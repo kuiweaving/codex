@@ -993,6 +993,11 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
     },
+
+    /// KuiWeaving daemon streamed markdown delta.
+    StreamedAgentMarkdown(String),
+    /// KuiWeaving daemon finished a turn.
+    AgentTurnFinished { turn_id: String },
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.

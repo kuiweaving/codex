@@ -987,6 +987,44 @@ impl App {
         };
         chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
+
+        // ── KuiWeaving daemon connection ──
+        let kw_client = {
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .unwrap_or_else(|_| AbsolutePathBuf::from(PathBuf::from("~/.codex")));
+            match crate::kw_client::KwClient::connect(&codex_home.join("kw-agent.sock")).await {
+                Ok(mut client) => {
+                    let plugin_ctx = serde_json::json!({
+                        "skills": [],
+                        "mcp_servers": [],
+                        "hooks": [],
+                    });
+                    match client
+                        .handshake(env!("CARGO_PKG_VERSION"), plugin_ctx)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!("Connected to KuiWeaving daemon");
+                            Some(std::sync::Arc::new(tokio::sync::Mutex::new(client)))
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "KW handshake failed: {e}. Falling back to native agent loop."
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "KuiWeaving daemon not available: {e}. Falling back to native agent loop."
+                    );
+                    None
+                }
+            }
+        };
+        chat_widget.kw_client = kw_client;
+
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 

@@ -498,6 +498,10 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+
+    /// When `true`, routes user turns through KuiWeaving daemon instead of the native agent loop.
+    #[serde(default)]
+    pub kw_mode: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

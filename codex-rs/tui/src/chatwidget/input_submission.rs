@@ -337,6 +337,53 @@ impl ChatWidget {
             .filter(|_| self.current_model_supports_personality());
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
+
+        // ── KuiWeaving hook: redirect to KW daemon if available ──
+        let use_kw = self.config.kw_mode
+            && self.kw_client.is_some()
+            && items.iter().any(|item| matches!(item, UserInput::Text { .. }));
+
+        if use_kw {
+            let text_input = items
+                .iter()
+                .find_map(|item| match item {
+                    UserInput::Text { text, .. } if !text.is_empty() => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            if let Some(kw) = self.kw_client.as_ref() {
+                let mut client = kw.lock().await;
+                let thread_id_str = self
+                    .thread_id()
+                    .unwrap_or_default()
+                    .to_string();
+                let turn_id = uuid::Uuid::new_v4().to_string();
+                match client
+                    .send_turn(
+                        &turn_id,
+                        &text_input,
+                        &self.config.cwd,
+                        &thread_id_str,
+                    )
+                    .await
+                {
+                    Ok(stream) => {
+                        if render_in_history {
+                            self.input_queue.user_turn_pending_start = true;
+                        }
+                        self.begin_kw_stream(stream, turn_id, text, history_record);
+                        return (true, None);
+                    }
+                    Err(e) => {
+                        tracing::warn!("KW turn failed: {e}. Falling back to native.");
+                        // Fall through to native Codex path
+                    }
+                }
+            }
+        }
+        // ── End KuiWeaving hook ──
+
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
@@ -418,6 +465,72 @@ impl ChatWidget {
 
         self.transcript.needs_final_message_separator = false;
         (true, Some(op))
+    }
+
+    fn begin_kw_stream(
+        &mut self,
+        stream: crate::kw_client::KwTurnStream,
+        turn_id: String,
+        user_text: String,
+        history_record: UserMessageHistoryRecord,
+    ) {
+        self.turn_lifecycle.agent_turn_running = true;
+        self.append_message_history_entry(user_text);
+
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            use crate::kw_client::KwEvent;
+            let mut stream = stream;
+            let mut markdown_buf = String::new();
+
+            while let Some(event) = stream.next_event().await {
+                match event {
+                    KwEvent::Thinking { delta, .. } => {
+                        markdown_buf.push_str(&delta);
+                        let _ = app_event_tx.send(crate::app_event::AppEvent::StreamedAgentMarkdown(
+                            markdown_buf.clone(),
+                        ));
+                    }
+                    KwEvent::ToolCall {
+                        tool_name,
+                        tool_input: _,
+                        ..
+                    } => {
+                        let line = format!("\n\n\u{1f527} **{tool_name}**\n");
+                        markdown_buf.push_str(&line);
+                    }
+                    KwEvent::ToolResult {
+                        tool_name,
+                        result,
+                        success,
+                        ..
+                    } => {
+                        let icon = if success { "\u{2705}" } else { "\u{274c}" };
+                        let line = format!(
+                            "\n<details>\n<summary>{icon} {tool_name}</summary>\n\n{result}\n</details>\n"
+                        );
+                        markdown_buf.push_str(&line);
+                    }
+                    KwEvent::TurnComplete {
+                        final_response, ..
+                    } => {
+                        if !final_response.is_empty() {
+                            markdown_buf.push_str(&final_response);
+                        }
+                        break;
+                    }
+                    KwEvent::Error { message, .. } => {
+                        markdown_buf.push_str(&format!("\n\u{26a0}\u{fe0f} {message}\n"));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let _ = app_event_tx.send(crate::app_event::AppEvent::StreamedAgentMarkdown(markdown_buf));
+            let _ = app_event_tx.send(crate::app_event::AppEvent::AgentTurnFinished {
+                turn_id,
+            });
+        });
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.

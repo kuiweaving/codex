@@ -1043,6 +1043,9 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+
+    /// When `true`, routes user turns through KuiWeaving daemon instead of the native agent loop.
+    pub kw_mode: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -3684,6 +3687,7 @@ impl Config {
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
             otel,
+            kw_mode: cfg.kw_mode.unwrap_or(false),
         };
         Ok(config)
         })

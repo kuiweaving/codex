@@ -574,7 +574,7 @@ pub(crate) struct ChatWidget {
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
-    turn_lifecycle: TurnLifecycleState,
+    pub(crate) turn_lifecycle: TurnLifecycleState,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks per-server MCP startup state while startup is in progress.
@@ -721,6 +721,8 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+    /// KuiWeaving daemon client, set when daemon is available.
+    pub(crate) kw_client: Option<std::sync::Arc<tokio::sync::Mutex<crate::kw_client::KwClient>>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -931,7 +933,7 @@ impl ChatWidget {
     }
 
     /// Record or update the raw markdown for the current agent turn.
-    fn record_agent_markdown(&mut self, message: &str) {
+    pub(crate) fn record_agent_markdown(&mut self, message: &str) {
         if !message.is_empty() {
             self.transcript.record_agent_markdown(message.to_string());
         }
