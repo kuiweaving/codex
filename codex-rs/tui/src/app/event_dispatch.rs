@@ -2029,7 +2029,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::AgentTurnFinished { turn_id: _ } => {
-                self.chat_widget.turn_lifecycle.agent_turn_running = false;
+                self.chat_widget.set_agent_turn_running(false);
             }
         }
         Ok(AppRunControl::Continue)

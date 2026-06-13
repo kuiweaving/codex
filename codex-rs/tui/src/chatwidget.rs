@@ -939,6 +939,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn set_agent_turn_running(&mut self, running: bool) {
+        self.turn_lifecycle.agent_turn_running = running;
+    }
+
     fn record_visible_user_turn_for_copy(&mut self) {
         self.transcript.record_visible_user_turn();
     }

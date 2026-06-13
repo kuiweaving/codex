@@ -352,34 +352,81 @@ impl ChatWidget {
                 })
                 .unwrap_or_default();
 
-            if let Some(kw) = self.kw_client.as_ref() {
-                let mut client = kw.lock().await;
+            if let Some(kw_client) = self.kw_client.clone() {
+                let cwd = self.config.cwd.clone();
                 let thread_id_str = self
                     .thread_id()
                     .unwrap_or_default()
                     .to_string();
                 let turn_id = uuid::Uuid::new_v4().to_string();
-                match client
-                    .send_turn(
-                        &turn_id,
-                        &text_input,
-                        &self.config.cwd,
-                        &thread_id_str,
-                    )
-                    .await
-                {
-                    Ok(stream) => {
-                        if render_in_history {
-                            self.input_queue.user_turn_pending_start = true;
-                        }
-                        self.begin_kw_stream(stream, turn_id, text, history_record);
-                        return (true, None);
-                    }
-                    Err(e) => {
-                        tracing::warn!("KW turn failed: {e}. Falling back to native.");
-                        // Fall through to native Codex path
-                    }
+                let app_event_tx = self.app_event_tx.clone();
+
+                if render_in_history {
+                    self.input_queue.user_turn_pending_start = true;
                 }
+
+                self.turn_lifecycle.agent_turn_running = true;
+                self.append_message_history_entry(text_input.clone());
+
+                tokio::spawn(async move {
+                    use crate::kw_client::KwEvent;
+                    let mut client = kw_client.lock().await;
+                    let stream = match client
+                        .send_turn(&turn_id, &text_input, &cwd, &thread_id_str)
+                        .await
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!("KW turn failed: {e}. Falling back.");
+                            let _ = app_event_tx.send(
+                                AppEvent::AgentTurnFinished { turn_id: String::new() }
+                            );
+                            return;
+                        }
+                    };
+                    // Drop the lock so other turns can proceed
+                    drop(client);
+
+                    let mut markdown_buf = String::new();
+                    let mut stream = stream;
+                    while let Some(event) = stream.next_event().await {
+                        match event {
+                            KwEvent::Thinking { delta, .. } => {
+                                markdown_buf.push_str(&delta);
+                                let _ = app_event_tx.send(
+                                    AppEvent::StreamedAgentMarkdown(markdown_buf.clone())
+                                );
+                            }
+                            KwEvent::ToolCall { tool_name, .. } => {
+                                let line = format!("\n\n🔧 **{tool_name}**\n");
+                                markdown_buf.push_str(&line);
+                            }
+                            KwEvent::ToolResult { tool_name, result, success, .. } => {
+                                let icon = if success { "✅" } else { "❌" };
+                                let line = format!("\n<details>\n<summary>{icon} {tool_name}</summary>\n\n{result}\n</details>\n");
+                                markdown_buf.push_str(&line);
+                            }
+                            KwEvent::TurnComplete { final_response, .. } => {
+                                if !final_response.is_empty() {
+                                    markdown_buf.push_str(&final_response);
+                                }
+                                break;
+                            }
+                            KwEvent::Error { message, .. } => {
+                                markdown_buf.push_str(&format!("\n⚠️ {message}\n"));
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let _ = app_event_tx.send(
+                        AppEvent::StreamedAgentMarkdown(markdown_buf)
+                    );
+                    let _ = app_event_tx.send(
+                        AppEvent::AgentTurnFinished { turn_id }
+                    );
+                });
+                return (true, None);
             }
         }
         // ── End KuiWeaving hook ──
@@ -465,72 +512,6 @@ impl ChatWidget {
 
         self.transcript.needs_final_message_separator = false;
         (true, Some(op))
-    }
-
-    fn begin_kw_stream(
-        &mut self,
-        stream: crate::kw_client::KwTurnStream,
-        turn_id: String,
-        user_text: String,
-        history_record: UserMessageHistoryRecord,
-    ) {
-        self.turn_lifecycle.agent_turn_running = true;
-        self.append_message_history_entry(user_text);
-
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            use crate::kw_client::KwEvent;
-            let mut stream = stream;
-            let mut markdown_buf = String::new();
-
-            while let Some(event) = stream.next_event().await {
-                match event {
-                    KwEvent::Thinking { delta, .. } => {
-                        markdown_buf.push_str(&delta);
-                        let _ = app_event_tx.send(crate::app_event::AppEvent::StreamedAgentMarkdown(
-                            markdown_buf.clone(),
-                        ));
-                    }
-                    KwEvent::ToolCall {
-                        tool_name,
-                        tool_input: _,
-                        ..
-                    } => {
-                        let line = format!("\n\n\u{1f527} **{tool_name}**\n");
-                        markdown_buf.push_str(&line);
-                    }
-                    KwEvent::ToolResult {
-                        tool_name,
-                        result,
-                        success,
-                        ..
-                    } => {
-                        let icon = if success { "\u{2705}" } else { "\u{274c}" };
-                        let line = format!(
-                            "\n<details>\n<summary>{icon} {tool_name}</summary>\n\n{result}\n</details>\n"
-                        );
-                        markdown_buf.push_str(&line);
-                    }
-                    KwEvent::TurnComplete {
-                        final_response, ..
-                    } => {
-                        if !final_response.is_empty() {
-                            markdown_buf.push_str(&final_response);
-                        }
-                        break;
-                    }
-                    KwEvent::Error { message, .. } => {
-                        markdown_buf.push_str(&format!("\n\u{26a0}\u{fe0f} {message}\n"));
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            let _ = app_event_tx.send(crate::app_event::AppEvent::StreamedAgentMarkdown(markdown_buf));
-            let _ = app_event_tx.send(crate::app_event::AppEvent::AgentTurnFinished {
-                turn_id,
-            });
-        });
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.

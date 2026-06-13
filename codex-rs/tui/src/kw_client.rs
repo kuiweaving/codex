@@ -1,20 +1,17 @@
-//! UDS client for KuiWeaving daemon communication.
+//! TCP client for KuiWeaving daemon communication.
 //!
-//! Connects to KuiWeaving daemon via Unix Domain Socket,
+//! Connects to KuiWeaving daemon via TCP (localhost:9528),
 //! sends turn/interrupt/status messages, receives streaming events.
-
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::net::TcpStream;
 
 /// Top-level KuiWeaving daemon client.
 pub struct KwClient {
-    stream: UnixStream,
-    reader: BufReader<UnixStream>,
-    socket_path: PathBuf,
+    reader: BufReader<TcpStream>,
+    addr: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -95,23 +92,20 @@ struct KwMessage {
 }
 
 impl KwClient {
-    /// Connect to KuiWeaving daemon at the given socket path.
-    pub async fn connect(socket_path: &Path) -> Result<Self> {
-        let stream = UnixStream::connect(socket_path)
+    /// Connect to KuiWeaving daemon at the given address (e.g. "127.0.0.1:9528").
+    pub async fn connect(addr: &str) -> Result<Self> {
+        let stream = TcpStream::connect(addr)
             .await
             .with_context(|| {
                 format!(
                     "Failed to connect to KuiWeaving daemon at {}",
-                    socket_path.display()
+                    addr
                 )
             })?;
 
-        let reader = BufReader::new(stream);
-
         Ok(Self {
-            stream: reader.get_ref().try_clone().await?,
-            reader,
-            socket_path: socket_path.to_path_buf(),
+            reader: BufReader::new(stream),
+            addr: addr.to_string(),
         })
     }
 
@@ -142,7 +136,7 @@ impl KwClient {
         &mut self,
         turn_id: &str,
         input: &str,
-        working_dir: &Path,
+        working_dir: &std::path::Path,
         session_id: &str,
     ) -> Result<KwTurnStream> {
         let msg = KwMessage {
@@ -214,13 +208,13 @@ impl KwClient {
     async fn send_msg(&mut self, msg: &KwMessage) -> Result<()> {
         let mut json = serde_json::to_string(msg)?;
         json.push('\n');
-        self.stream.write_all(json.as_bytes()).await?;
-        self.stream.flush().await?;
+        self.reader.get_mut().write_all(json.as_bytes()).await?;
+        self.reader.get_mut().flush().await?;
         Ok(())
     }
 
-    pub fn socket_path(&self) -> &Path {
-        &self.socket_path
+    pub fn addr(&self) -> &str {
+        &self.addr
     }
 }
 
@@ -230,13 +224,12 @@ pub struct KwTurnStream {
     turn_id: String,
 }
 
-// SAFETY: KwTurnStream is only used on the same task that owns KwClient.
 unsafe impl Send for KwTurnStream {}
+unsafe impl Sync for KwTurnStream {}
 
 impl KwTurnStream {
     /// Read the next event in this turn. Returns None when turn completes or errors.
     pub async fn next_event(&self) -> Option<KwEvent> {
-        // SAFETY: The KwClient lives as long as the TUI app, which owns the stream.
         let client = unsafe { &mut *(self.client_ref as *mut KwClient) };
         loop {
             match client.read_event().await {

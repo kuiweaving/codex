@@ -990,9 +990,7 @@ impl App {
 
         // ── KuiWeaving daemon connection ──
         let kw_client = {
-            let codex_home = codex_utils_home_dir::find_codex_home()
-                .unwrap_or_else(|_| AbsolutePathBuf::from(PathBuf::from("~/.codex")));
-            match crate::kw_client::KwClient::connect(&codex_home.join("kw-agent.sock")).await {
+            match crate::kw_client::KwClient::connect("127.0.0.1:9528").await {
                 Ok(mut client) => {
                     let plugin_ctx = serde_json::json!({
                         "skills": [],
